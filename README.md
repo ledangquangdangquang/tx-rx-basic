@@ -82,3 +82,51 @@ Thứ tự các bước này không đổi được tuỳ tiện — xem `CLAUDE
 để biết chi tiết.
 
 Biến workspace giữ nguyên quy ước: `Fs`, `Fc`, `baud_rate`, `sps`.
+
+## Debug bằng cách in biến ở dấu nhắc `K>>`
+
+Cách nhanh nhất để xem tín hiệu thay đổi qua từng bước của `Rx.m` (hạ tần →
+lọc phối hợp → bù CFO → cân bằng...) mà không cần sửa code thêm lệnh `disp`:
+đặt breakpoint rồi gõ thẳng tên biến.
+
+1. Trong MATLAB Editor, click vào lề trái một dòng trong `Rx.m` (ví dụ dòng
+   `mf_out = conv(...)`) để đặt breakpoint (chấm đỏ), hoặc gõ
+   `dbstop in Rx at 40` (số dòng tùy phiên bản file).
+2. Chạy `Rx.m`. Chương trình dừng ngay trước dòng đó, dấu nhắc command
+   window đổi từ `>>` thành `K>>` — nghĩa là đang ở chế độ debug, workspace
+   hiện tại là workspace **bên trong** script, không phải base workspace.
+3. Gõ thẳng tên biến (không cần `disp`) rồi Enter, MATLAB tự in ra giá trị
+   ngay lúc đó — ví dụ:
+
+   ```
+   K>> rx_bb(1:10)
+   K>> mf_out(1:10)
+   ```
+
+   So sánh giá trị trước/sau mỗi bước (bước nhảy `dbstep`/F10 qua dòng rồi
+   in lại biến đó) là cách thấy trực tiếp mỗi bước biến đổi tín hiệu thế
+   nào, thay vì đoán từ code.
+4. `dbcont` (hoặc F5) để chạy tiếp, `dbquit` để thoát debug giữa chừng,
+   `dbclear all` để gỡ hết breakpoint khi xong.
+
+## Hình minh họa
+
+Sinh bằng cách chạy `gen_readme_images.m` (chạy `Tx.m` + `Rx.m` rồi lưu các
+hình ra `img/`) — chạy lại file này để tạo hình mới nếu đổi tham số.
+
+![Chòm sao ký hiệu dữ liệu sau cân bằng pilot](img/constellation.png)
+
+Chòm sao 2-PAM sau cân bằng: hai cụm điểm tách rõ quanh trục thực (bit 0/1),
+độ tán ra theo trục ảo là nhiễu pha còn sót lại sau bù CFO.
+
+![Baseband I sau hạ tần](img/baseband_I.png)
+
+Phần I của tín hiệu sau hạ tần: đoạn giữa có biên độ lớn là khung tín hiệu
+thật (preamble + data), hai bên là khoảng lặng `pad` — nhìn hình này để
+kiểm tra khung có nằm giữa khoảng lặng đầu/cuối như kỳ vọng không.
+
+![Spectrogram tín hiệu thu được](img/spectrogram.png)
+
+Spectrogram: dải năng lượng quanh `Fc = 8000 Hz` chỉ xuất hiện đúng lúc
+khung tín hiệu được phát, hữu ích để soi CFO/nhiễu trôi theo thời gian rõ
+hơn xem FFT tĩnh trên cả file.
