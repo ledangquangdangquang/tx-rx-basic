@@ -18,14 +18,56 @@ nếu cần.
    data), điều chế thành xung vuông NRZ ở tần số mang `Fc`, ghi ra
    `tx_cable.wav` và lưu toàn bộ tham số/bit vào `tx_params.mat`. Copy
    `tx_cable.wav` sang điện thoại.
-2. Chạy `Rx.m`. Mặc định `USE_LOOPBACK = true` — tự kiểm tra bằng cách giải
-   mã lại đúng `tx_signal` đang có trong workspace, không cần điện thoại/cáp
-   (BER phải ra đúng 0). Đổi thành `false` để ghi âm thật qua
-   `audiorecorder` (bản ghi được lưu ra `rx_debug.wav` để soi lại nếu giải
-   mã sai).
+2. Chạy `Rx.m`. Chọn nguồn tín hiệu qua biến `RX_SOURCE`:
+   - `'loopback'` (mặc định) — tự kiểm tra bằng cách giải mã lại đúng
+     `tx_signal` đang có trong workspace, không cần điện thoại/cáp (BER
+     phải ra đúng 0).
+   - `'record'` — ghi âm thật qua `audiorecorder` (bản ghi được lưu ra
+     `rx_debug.wav` để soi lại nếu giải mã sai).
+   - `'file'` — đọc lại `rx_debug.wav` đã ghi từ lần `'record'` trước đó,
+     giải mã lại mà không cần cắm cáp/thu lại. **Lưu ý**: `rx_debug.wav`
+     phải cùng lần chạy với `tx_params.mat` đang nạp (cùng `data_bits`) —
+     nếu chạy lại `Tx.m` sau khi thu âm, `tx_params.mat` bị ghi đè và giải
+     mã file cũ sẽ ra BER ~0.5 (so nhầm với bit của lần chạy khác, không
+     phải lỗi kênh truyền).
 3. Nếu workspace bị mất (restart MATLAB), `Rx.m` tự nạp lại tham số từ
    `tx_params.mat` — file này chỉ được tạo sau khi `Tx.m` đã chạy ít nhất
    một lần.
+
+## Kênh truyền và tham số
+
+Kênh truyền dùng dây cáp tai nghe (headphone cable) nối trực tiếp ngõ ra
+loa/tai nghe của điện thoại vào ngõ vào line-in/mic của laptop — không
+qua không khí (không phải kênh âm thanh vô tuyến).
+
+- `Fs = 48000` Hz (sample rate), `Fc = 8000` Hz (tần số mang),
+  `baud_rate = 1000` bit/s → `sps = 48` mẫu/ký hiệu.
+- Khung: preamble 50 bit + 20 block × (1 bit pilot + 10 bit data) = 250 bit
+  data thực (`bits_per_block = 10`, `num_blocks = 20`).
+- **Mức âm lượng khi thu thật (`RX_SOURCE = 'record'`)**:
+  - Điện thoại (phát): để loa ở mức ~30%.
+  - Laptop (thu): input line-in/mic ở chế độ **stereo**, mức thu ~30%.
+  - Chỉnh 2 mức này tương ứng để tránh clipping (quá to, méo tín hiệu) hoặc
+    tín hiệu quá nhỏ lẫn vào nhiễu nền (quá nhỏ) — cả hai đều làm tăng BER.
+
+### Ghi chú môi trường Linux
+
+Để `audiorecorder`/`audiodevinfo` trong MATLAB nhận đúng thiết bị vào/ra
+mặc định qua PulseAudio (thay vì ALSA không tìm thấy hoặc bắt nhầm thiết
+bị), `~/.asoundrc` đã được chỉnh để trỏ `pcm.!default`/`ctl.!default` sang
+`type pulse`:
+
+```
+pcm.!default {
+    type pulse
+}
+ctl.!default {
+    type pulse
+}
+```
+
+Nếu `RX_SOURCE = 'record'` không thu được gì (peak/rms gần 0) hoặc
+`audiorecorder` báo lỗi thiết bị, kiểm tra lại file này trước.
 
 ## Chuỗi giải điều chế ở `Rx.m`
 

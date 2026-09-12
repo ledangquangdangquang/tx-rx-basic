@@ -5,11 +5,15 @@ if ~exist('Fs', 'var')
     load(fullfile(fileparts(mfilename('fullpath')), 'tx_params.mat'));
 end
 
-USE_LOOPBACK = true; % ponytail: bat true de tu-kiem-tra khong can dien thoai/cap that;
-                      % chuyen false khi thu that qua cap tai nghe.
+RX_SOURCE = 'file'; % 'loopback' = tu-kiem-tra khong can dien thoai/cap that
+                        % 'record'   = thu that qua cap tai nghe
+                        % 'file'     = doc lai rx_debug.wav da thu truoc do (chan doan lai
+                        %              khong can thu lai lan nua)
 
-if USE_LOOPBACK
+if strcmp(RX_SOURCE, 'loopback')
     rx_raw = tx_signal(:);
+elseif strcmp(RX_SOURCE, 'file')
+    rx_raw = audioread(fullfile(fileparts(mfilename('fullpath')), 'rx_debug.wav'));
 else
     record_time = 5; % ghi thu that: chua biet tx_signal dai bao nhieu, mac dinh 5s
     input_device_id = -1; % ponytail: -1 = thiet bi mac dinh he thong; neu bi thu nham
