@@ -103,12 +103,9 @@ không phải dữ liệu:
 
 ```
 >> rx_bb(1:10)
-  -0.0012 + 0.0000i
-  -0.0000 + 0.0000i
-   0.0002 + 0.0003i
-  -0.0001 - 0.0000i
-   0.0001 - 0.0002i
-   ...
+  -0.0012 + 0.0000i   -0.0000 + 0.0000i    0.0002 + 0.0003i   -0.0001 - 0.0000i
+   0.0001 - 0.0002i    0.0000 + 0.0000i   -0.0001 - 0.0000i    0.0002 - 0.0003i
+  -0.0001 - 0.0001i    0.0000 + 0.0000i
 ```
 
 ### 2. Lọc phối hợp: `mf_out`
@@ -124,9 +121,9 @@ nhanh hơn từng mẫu riêng lẻ:
 ```
 >> mf_out(1:10)
    1.0e-04 *
-  -0.4609 - 0.1156i
-  -0.3338 - 0.3359i
-   ...
+  -0.4609 - 0.1156i   -0.3338 - 0.3359i   -0.3688 - 0.3964i   -0.4514 - 0.3964i
+  -0.4196 - 0.4515i   -0.4641 - 0.5286i   -0.4832 - 0.5286i   -0.3751 - 0.7158i
+  -0.4800 - 0.8975i   -0.5054 - 0.8975i
 ```
 
 So hai đoạn trên với nhau là cách trực quan thấy đúng việc lọc phối hợp
@@ -182,6 +179,18 @@ không cố định giữa các lần chạy/thiết bị.
 `unwrap` nhảy sai hẳn 2π, kéo theo `polyfit` suy ra một CFO giả rất lớn.
 Tính từng cặp liên tiếp giới hạn thiệt hại của 1 mẫu lỗi vào đúng 1 cặp đó.
 
+10 mẫu đầu của `preamble_seg` — tức đúng 10 mẫu đầu của `mf_out` nhưng lấy
+từ `start_idx` trở đi thay vì từ đầu file — đã là tín hiệu thật (biên độ
+`~0.07-0.09`), khác hẳn phần nhiễu nền `~1e-4` ở bước 1-2 vì giờ đây không
+còn nằm trong đoạn `pad` nữa:
+
+```
+>> preamble_seg(1:10)
+  -0.0743 + 0.0020i   -0.0758 + 0.0047i   -0.0771 + 0.0025i   -0.0821 + 0.0025i
+  -0.0837 + 0.0053i   -0.0849 + 0.0032i   -0.0900 + 0.0032i   -0.0915 + 0.0059i
+  -0.0927 + 0.0039i   -0.0979 + 0.0039i
+```
+
 ### 5. Bù CFO: `mf_corr`
 
 `mf_corr = mf_out(start_idx:end) .* exp(-j*2*pi*cfo_hz*n/Fs)` — áp `cfo_hz`
@@ -189,6 +198,18 @@ vừa ước lượng để xoay ngược pha, bắt đầu tính từ `start_id
 `pad`/nhiễu trước preamble). Từ đây trở đi lý tưởng là mỗi ký hiệu đã đứng
 yên về pha, chỉ còn lệch biên độ/pha hằng số do kênh truyền (dây cáp +
 loa + mic) — phần đó do bước cân bằng pilot ở dưới xử lý tiếp.
+
+10 mẫu đầu của `mf_corr` — đúng cùng vị trí với `preamble_seg` ở trên, chỉ
+khác là đã xoay bù CFO. Phần thực gần như không đổi (biên độ ký hiệu không
+phụ thuộc CFO), nhưng phần ảo co lại rõ rệt (ví dụ mẫu thứ 8: từ `+0.0059i`
+xuống `+0.0040i`) — đúng cái CFO làm: kéo pha đứng yên lại thay vì trôi dần:
+
+```
+>> mf_corr(1:10)
+  -0.0743 + 0.0020i   -0.0758 + 0.0045i   -0.0771 + 0.0021i   -0.0822 + 0.0018i
+  -0.0838 + 0.0043i   -0.0849 + 0.0020i   -0.0900 + 0.0017i   -0.0916 + 0.0040i
+  -0.0927 + 0.0018i   -0.0980 + 0.0014i
+```
 
 ### 6. Lấy mẫu + cân bằng từng block: vòng lặp `for blk = 1:num_blocks`
 
@@ -224,6 +245,19 @@ Mỗi block gồm 1 bit pilot (giá trị đã biết, `pilot_val`) rồi tới
   lại đúng ±1 gốc. `rx_bits(bit_ptr) = real(eq_sym) > 0` là **slicer 2-PAM**
   cuối cùng: chỉ cần dấu phần thực để quyết định bit 0/1.
 
+10 ký hiệu đã cân bằng của block 1 (đúng `bits_per_block = 10` giá trị,
+1 giá trị/bit data) — so với biên độ `~0.07-0.09` lúc chưa cân bằng ở bước
+4-5, giờ phần thực đã kéo về sát ±1 và phần ảo gần như triệt tiêu, đúng
+việc `g` (hệ số kênh ước lượng từ pilot) làm — gỡ bỏ suy hao/lệch pha do
+dây cáp + loa + mic:
+
+```
+>> eq_sym_blk1  % = mf_corr(...) / g, 1 gia tri / bit data trong block 1
+  -0.9574 + 0.0393i    0.9565 - 0.0356i    0.9988 + 0.0046i   -0.9577 + 0.0329i
+  -0.9980 - 0.0078i   -0.9986 - 0.0075i    0.9538 - 0.0189i   -0.9493 + 0.0127i
+   0.9435 - 0.0051i   -0.9345 - 0.0010i
+```
+
 ### 7. Kết quả: `num_err`, `ber`, `block_err`
 
 `[num_err, ber] = biterr(data_bits, rx_bits)` so trực tiếp bit gốc (Tx) với
@@ -233,6 +267,20 @@ block (nghi nhiễu nền) so với lỗi **tăng dần về cuối khung** (ngh
 đồng hồ lấy mẫu chưa bám kịp, xem thêm `bai_hoc.md`/`CLAUDE.md` ở thư mục
 gốc). Ở lần chạy minh hoạ trên, `block_err` toàn số 0 (`ber = 0`) — cân
 bằng + bám trôi đã đủ tốt cho lần thu đó, dù `timing_off` vẫn trôi dần.
+
+10 bit đầu tiên sau slicer (`> 0` trên phần thực của `eq_sym_blk1` ở trên)
+khớp đúng 10 bit gốc `data_bits(1:10)` — chốt lại toàn bộ chuỗi: nhiễu nền
+`~1e-4` → tín hiệu preamble thật `~0.08` → pha đứng yên sau bù CFO →
+biên độ ±1 sau cân bằng pilot → bit 0/1:
+
+```
+>> rx_bits(1:10)      0  1  1  0  0  0  1  0  1  0
+>> data_bits(1:10)    0  1  1  0  0  0  1  0  1  0
+```
+
+Toàn bộ số liệu ở trên lấy từ script `print_pipeline_samples.m` (chạy
+`Tx.m` + `Rx.m` rồi in 10 mẫu đầu ở mỗi bước) — chạy lại file này để lấy
+số liệu mới nếu đổi tham số hoặc thu âm mới.
 
 ## Hình minh họa
 
