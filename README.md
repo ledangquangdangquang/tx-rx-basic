@@ -83,7 +83,13 @@ Thứ tự các bước này không đổi được tuỳ tiện — xem `CLAUDE
 
 Biến workspace giữ nguyên quy ước: `Fs`, `Fc`, `baud_rate`, `sps`.
 
-## Ý nghĩa `rx_bb` và `mf_out` — hai biến trung gian đầu tiên của `Rx.m`
+## Ý nghĩa từng biến trung gian trong `Rx.m`
+
+Đi theo đúng thứ tự các bước trong file (xem thêm "Chuỗi giải điều chế" ở
+trên), số liệu minh hoạ lấy từ một lần chạy thật (`RX_SOURCE = 'file'`, đọc
+lại `rx_debug.wav`).
+
+### 1. Hạ tần xuống baseband: `rx_bb`
 
 `rx_bb` là tín hiệu **baseband phức** ngay sau bước hạ tần
 (`rx_bb = rx_raw .* exp(-1j*2*pi*Fc*t)`): mỗi mẫu thực của `rx_raw` bị nhân
@@ -104,6 +110,8 @@ không phải dữ liệu:
    0.0001 - 0.0002i
    ...
 ```
+
+### 2. Lọc phối hợp: `mf_out`
 
 `mf_out` là `rx_bb` sau khi qua **lọc phối hợp** (`conv(rx_bb, ones(sps,1)/sps, 'same')`
 — tương đương integrate-and-dump, lấy trung bình trượt trên đúng độ dài
@@ -126,6 +134,105 @@ làm: **giảm nhiễu bằng cách trung bình hoá**, còn việc dựng lại
 độ ±1 của ký hiệu chỉ xảy ra khi lấy mẫu đúng vị trí giữa mỗi ký hiệu bên
 trong đoạn preamble/data thật (xem `scatterplot` bên dưới) — 10 mẫu đầu
 tiên (trong `pad`) không phản ánh việc đó.
+
+### 3. Đồng bộ khung: `preamble_ref`, `cfo_grid`, `c`/`lags`, `start_idx`, `peak_val`, `sync_confidence`
+
+`preamble_ref` là dạng sóng **kỳ vọng** của 50 bit preamble (đã biết trước
+ở cả Tx lẫn Rx) sau khi trải mỗi bit thành `sps` mẫu — dùng làm mẫu để so
+khớp, không phải tín hiệu thu được.
+
+`cfo_grid = -500:15:500` là danh sách các mức lệch tần số mang (Hz) đem thử
+trước khi tương quan. Lý do phải quét thay vì tương quan thẳng `mf_out` với
+`preamble_ref`: nếu CFO thật đủ lớn, pha trôi hết một vòng trong lúc tương
+quan trên cả 50 ký hiệu preamble làm phép cộng tương quan tự triệt tiêu lẫn
+nhau (tưởng như không tìm thấy preamble dù nó vẫn ở đó). Với mỗi mức thử
+trong `cfo_grid`, `derot = mf_out .* exp(-j*2*pi*cfo_try*n/Fs)` xoay ngược
+thử tín hiệu theo mức đó rồi `xcorr` với `preamble_ref` ra `c_try`/`lags_try`;
+mức nào cho đỉnh tương quan `pv` cao nhất được giữ lại làm `c`, `lags`, `pk`.
+
+- `peak_val` = độ lớn đỉnh tương quan cao nhất tìm được.
+- `start_idx = lags(pk) + 1` = vị trí mẫu (trong `mf_out`) mà preamble thật
+  sự bắt đầu — mọi chỉ số phía sau (`data_start`, `blk_off`...) đều tính
+  từ mốc này.
+- `sync_confidence = peak_val / median(abs(c))` = tỉ lệ đỉnh/nền tương
+  quan. Ví dụ một lần chạy thật: `sync_confidence ≈ 99696` — rất cao nghĩa
+  là đỉnh nổi bật hẳn so với nền, gần như chắc chắn đúng preamble; nếu chỉ
+  vài lần (vài chục) thì đỉnh đó có thể chỉ là trùng hợp ngẫu nhiên, không
+  nên tin `start_idx` tìm được.
+
+### 4. Ước lượng CFO: `preamble_seg`, `sym_val`, `diffs`, `avg_step`, `cfo_hz`
+
+`preamble_seg` = đúng đoạn `mf_out` tương ứng 50 ký hiệu preamble, cắt ra
+từ `start_idx`. `sym_val(k)` lấy 1 mẫu giữa mỗi ký hiệu preamble rồi nhân
+với `preamble_sym(k)` (±1 đã biết trước) để bù dấu — nếu không có CFO/nhiễu,
+mọi phần tử của `sym_val` sẽ có cùng một pha (chỉ khác biên độ do nhiễu).
+
+`diffs = sym_val(2:end) .* conj(sym_val(1:end-1))` là **hiệu pha giữa hai
+ký hiệu liên tiếp** (nhân với liên hợp phức = trừ pha). CFO làm pha trôi
+đều đặn theo thời gian nên mỗi `diffs(k)` xoay cùng một góc — `avg_step`
+lấy góc của **trung bình vector** (không phải trung bình góc thô, để bền
+với nhiễu wraparound quanh ±π). Từ đó suy ra tần số:
+`cfo_hz = avg_step / (2*pi*sps/Fs)` — góc trôi mỗi ký hiệu, chia cho thời
+gian một ký hiệu (`sps/Fs` giây), ra đơn vị Hz. Ví dụ thực tế: `cfo_hz ≈
+-22.03 Hz` — điện thoại và laptop lệch đồng hồ tạo dao động khoảng đó,
+không cố định giữa các lần chạy/thiết bị.
+
+*Vì sao tính hiệu pha từng cặp thay vì `unwrap` rồi `polyfit` trên cả 50
+điểm*: một mẫu nhiễu/méo bất thường (rất dễ gặp trên cáp thật) có thể làm
+`unwrap` nhảy sai hẳn 2π, kéo theo `polyfit` suy ra một CFO giả rất lớn.
+Tính từng cặp liên tiếp giới hạn thiệt hại của 1 mẫu lỗi vào đúng 1 cặp đó.
+
+### 5. Bù CFO: `mf_corr`
+
+`mf_corr = mf_out(start_idx:end) .* exp(-j*2*pi*cfo_hz*n/Fs)` — áp `cfo_hz`
+vừa ước lượng để xoay ngược pha, bắt đầu tính từ `start_idx` (bỏ hẳn phần
+`pad`/nhiễu trước preamble). Từ đây trở đi lý tưởng là mỗi ký hiệu đã đứng
+yên về pha, chỉ còn lệch biên độ/pha hằng số do kênh truyền (dây cáp +
+loa + mic) — phần đó do bước cân bằng pilot ở dưới xử lý tiếp.
+
+### 6. Lấy mẫu + cân bằng từng block: vòng lặp `for blk = 1:num_blocks`
+
+Mỗi block gồm 1 bit pilot (giá trị đã biết, `pilot_val`) rồi tới
+`bits_per_block` bit data. Vòng lặp làm hai việc cùng lúc: **bám trôi
+đồng hồ lấy mẫu** và **cân bằng biên độ/pha theo pilot**.
+
+- `blk_off_nom` = vị trí *lý thuyết* của block (nếu đồng hồ hai máy khớp
+  tuyệt đối), tính thẳng từ `data_start` và số thứ tự block.
+- `timing_off` = độ lệch **luỹ kế** (tính bằng số mẫu) so với lý thuyết,
+  mang từ block trước sang — đại diện cho việc đồng hồ lấy mẫu của điện
+  thoại/laptop trôi dần theo thời gian.
+- `pilot_idx_nom` = vị trí dự đoán của đỉnh pilot (lý thuyết + lệch luỹ kế
+  từ block trước), `cand` là một cửa sổ nhỏ (`±search_win`, ở đây
+  `search_win = round(sps/4) = 12` mẫu) quanh vị trí dự đoán đó.
+- `pilot_idx` = vị trí trong `cand` có biên độ `|mf_corr|` lớn nhất — coi
+  đó là đỉnh pilot thật của block này (early-late tracking đơn giản: tìm
+  lại đỉnh thay vì tin cứng vị trí lý thuyết).
+- `timing_off` được cập nhật lại = chênh lệch giữa `pilot_idx` thật và vị
+  trí lý thuyết, mang tiếp sang block sau. `block_timing` chỉ lưu lại dãy
+  `timing_off` qua từng block để in ra chẩn đoán, không dùng để giải mã.
+  Ví dụ thực tế, lệch tăng dần đều: `[3 8 8 8 9 11 11 14 14 20 19 21 22 24
+  27 16 26 29 33 30]` (mẫu) — tăng dần chứng tỏ có clock drift thật giữa
+  hai máy, không phải nhiễu ngẫu nhiên (nhiễu ngẫu nhiên sẽ dao động quanh
+  0, không trôi một chiều).
+- `g = mf_corr(...pilot...) / pilot_sym` = **hệ số kênh** ước lượng từ
+  chính pilot: lấy mẫu tại đỉnh pilot rồi chia cho giá trị pilot đã biết
+  (`pilot_sym = ±1`) — vì kênh (cáp + loa + mic) chỉ nhân tín hiệu với một
+  hệ số phức gần như không đổi trong 1 block ngắn, `g` gần đúng bằng đúng
+  hệ số đó.
+- Với mỗi bit data trong block: `eq_sym = mf_corr(idx_c) / g` — **cân bằng
+  zero-forcing**, chia cho `g` để "gỡ" ảnh hưởng kênh, đưa ký hiệu về gần
+  lại đúng ±1 gốc. `rx_bits(bit_ptr) = real(eq_sym) > 0` là **slicer 2-PAM**
+  cuối cùng: chỉ cần dấu phần thực để quyết định bit 0/1.
+
+### 7. Kết quả: `num_err`, `ber`, `block_err`
+
+`[num_err, ber] = biterr(data_bits, rx_bits)` so trực tiếp bit gốc (Tx) với
+bit vừa giải mã, ra số bit sai và tỉ lệ lỗi bit. `block_err(blk)` đếm lỗi
+riêng từng block để phân biệt hai kiểu lỗi: lỗi rải đều ngẫu nhiên trên các
+block (nghi nhiễu nền) so với lỗi **tăng dần về cuối khung** (nghi do trôi
+đồng hồ lấy mẫu chưa bám kịp, xem thêm `bai_hoc.md`/`CLAUDE.md` ở thư mục
+gốc). Ở lần chạy minh hoạ trên, `block_err` toàn số 0 (`ber = 0`) — cân
+bằng + bám trôi đã đủ tốt cho lần thu đó, dù `timing_off` vẫn trôi dần.
 
 ## Hình minh họa
 
