@@ -287,6 +287,27 @@ số liệu mới nếu đổi tham số hoặc thu âm mới.
 Sinh bằng cách chạy `gen_readme_images.m` (chạy `Tx.m` + `Rx.m` rồi lưu các
 hình ra `img/`) — chạy lại file này để tạo hình mới nếu đổi tham số.
 
+![Phổ tần rx_raw](img/spectrum_rx_raw.png)
+
+Phổ tần `rx_raw` (tín hiệu thô thu được): hai đỉnh đối xứng tại `±Fc =
+±8000 Hz` — đúng dạng phổ của tín hiệu thực điều chế lên tần số mang bằng
+`cos(2*pi*Fc*t)` (nhân với cos đưa phổ baseband lên cả hai bên `+Fc` và
+`-Fc`).
+
+![Phổ tần rx_bb](img/spectrum_rx_bb.png)
+
+Phổ tần `rx_bb` sau hạ tần: đỉnh ở `+Fc` bị kéo về đúng `0 Hz` (đây là phổ
+baseband thật cần lấy), còn đỉnh còn lại bị đẩy ra `-2*Fc = -16000 Hz` —
+hệ quả của phép nhân phức `exp(-j*2*pi*Fc*t)` dịch cả phổ đi `-Fc` thay vì
+gập nó lại như nhân với cos thực.
+
+![Phổ tần mf_out](img/spectrum_mf_out.png)
+
+Phổ tần `mf_out` sau lọc phối hợp: đỉnh giả ở `-16000 Hz` hầu như biến mất,
+chỉ còn lại đúng dải hẹp quanh `0 Hz` — lọc phối hợp (integrate-and-dump,
+về bản chất là một bộ lọc thông thấp) đã loại bỏ ảnh phổ `-2*Fc` lẫn nhiễu
+tần số cao, giữ lại đúng phần baseband mang bit dữ liệu.
+
 ![Chòm sao ký hiệu dữ liệu sau cân bằng pilot](img/constellation.png)
 
 Chòm sao 2-PAM sau cân bằng: hai cụm điểm tách rõ quanh trục thực (bit 0/1),
