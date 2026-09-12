@@ -83,31 +83,49 @@ Thứ tự các bước này không đổi được tuỳ tiện — xem `CLAUDE
 
 Biến workspace giữ nguyên quy ước: `Fs`, `Fc`, `baud_rate`, `sps`.
 
-## Debug bằng cách in biến ở dấu nhắc `K>>`
+## Ý nghĩa `rx_bb` và `mf_out` — hai biến trung gian đầu tiên của `Rx.m`
 
-Cách nhanh nhất để xem tín hiệu thay đổi qua từng bước của `Rx.m` (hạ tần →
-lọc phối hợp → bù CFO → cân bằng...) mà không cần sửa code thêm lệnh `disp`:
-đặt breakpoint rồi gõ thẳng tên biến.
+`rx_bb` là tín hiệu **baseband phức** ngay sau bước hạ tần
+(`rx_bb = rx_raw .* exp(-1j*2*pi*Fc*t)`): mỗi mẫu thực của `rx_raw` bị nhân
+với một pha quay `exp(-j*2*pi*Fc*t)` nên có cả phần thực lẫn phần ảo — phần
+thực mang thông tin biên độ ký hiệu (giống tín hiệu I truyền thống), phần
+ảo là phần vuông pha (Q) sinh ra do phép nhân phức, sẽ bị lọc bỏ dần ở các
+bước sau. 10 mẫu đầu tiên của file luôn rơi vào đoạn `pad` (khoảng lặng
+im lặng Tx chèn vào đầu/cuối file), nên giá trị rất nhỏ và không theo quy
+luật cố định — đó là nền nhiễu của mic/ADC/loa lúc chưa có tín hiệu thật,
+không phải dữ liệu:
 
-1. Trong MATLAB Editor, click vào lề trái một dòng trong `Rx.m` (ví dụ dòng
-   `mf_out = conv(...)`) để đặt breakpoint (chấm đỏ), hoặc gõ
-   `dbstop in Rx at 40` (số dòng tùy phiên bản file).
-2. Chạy `Rx.m`. Chương trình dừng ngay trước dòng đó, dấu nhắc command
-   window đổi từ `>>` thành `K>>` — nghĩa là đang ở chế độ debug, workspace
-   hiện tại là workspace **bên trong** script, không phải base workspace.
-3. Gõ thẳng tên biến (không cần `disp`) rồi Enter, MATLAB tự in ra giá trị
-   ngay lúc đó — ví dụ:
+```
+>> rx_bb(1:10)
+  -0.0012 + 0.0000i
+  -0.0000 + 0.0000i
+   0.0002 + 0.0003i
+  -0.0001 - 0.0000i
+   0.0001 - 0.0002i
+   ...
+```
 
-   ```
-   K>> rx_bb(1:10)
-   K>> mf_out(1:10)
-   ```
+`mf_out` là `rx_bb` sau khi qua **lọc phối hợp** (`conv(rx_bb, ones(sps,1)/sps, 'same')`
+— tương đương integrate-and-dump, lấy trung bình trượt trên đúng độ dài
+`sps` mẫu của một ký hiệu). Vì vẫn đang xét đúng 10 mẫu đầu (vẫn nằm trong
+`pad`), lọc này chỉ đang trung bình hoá đúng đoạn nhiễu đó — nên biên độ
+càng nhỏ hơn nữa (nhỏ hơn cả bậc, `1e-4` so với `1e-3`+ của `rx_bb`) vì
+trung bình cộng của nhiễu ngẫu nhiên qua nhiều mẫu có xu hướng dồn về 0
+nhanh hơn từng mẫu riêng lẻ:
 
-   So sánh giá trị trước/sau mỗi bước (bước nhảy `dbstep`/F10 qua dòng rồi
-   in lại biến đó) là cách thấy trực tiếp mỗi bước biến đổi tín hiệu thế
-   nào, thay vì đoán từ code.
-4. `dbcont` (hoặc F5) để chạy tiếp, `dbquit` để thoát debug giữa chừng,
-   `dbclear all` để gỡ hết breakpoint khi xong.
+```
+>> mf_out(1:10)
+   1.0e-04 *
+  -0.4609 - 0.1156i
+  -0.3338 - 0.3359i
+   ...
+```
+
+So hai đoạn trên với nhau là cách trực quan thấy đúng việc lọc phối hợp
+làm: **giảm nhiễu bằng cách trung bình hoá**, còn việc dựng lại đúng biên
+độ ±1 của ký hiệu chỉ xảy ra khi lấy mẫu đúng vị trí giữa mỗi ký hiệu bên
+trong đoạn preamble/data thật (xem `scatterplot` bên dưới) — 10 mẫu đầu
+tiên (trong `pad`) không phản ánh việc đó.
 
 ## Hình minh họa
 
