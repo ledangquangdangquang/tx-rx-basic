@@ -327,6 +327,83 @@ Toàn bộ số liệu ở trên lấy từ script `print_pipeline_samples.m` (c
 `Tx.m` + `Rx.m` rồi in 10 mẫu đầu ở mỗi bước) — chạy lại file này để lấy
 số liệu mới nếu đổi tham số hoặc thu âm mới.
 
+## Ví dụ số: bit → ký hiệu → trôi pha CFO → bù CFO
+
+Ví dụ minh hoạ tay (số tròn, không lấy từ 1 lần chạy thật) cho đúng 4 bước
+ước lượng/bù CFO ở mục 4-5 phía trên. Số phức viết theo dạng **biên độ∠góc**
+(`r∠θ`, biên độ = 1 cho gọn) thay vì `a+jb`, vì phép nhân trong bước này chỉ
+là **nhân biên độ, cộng góc** — không cần khai triển thực/ảo. Mỗi giá trị
+dưới đây là 1 **ký hiệu** (1 điểm đại diện 1 bit, lấy tại tâm `sps` mẫu),
+không phải 1 **mẫu** rời rạc.
+
+6 bit preamble ví dụ: `1 0 1 1 0 1`, giả sử CFO thật = 20 Hz,
+`baud_rate = 1000` → mỗi ký hiệu (`T = 1ms`) trôi thêm
+`2π·20·0.001 ≈ 7.2°`.
+
+**Bước 1 — bit → ký hiệu (Tx):** biên độ luôn = 1, chỉ góc mang thông tin bit.
+
+| k | bit gốc | ký hiệu `r∠θ` |
+|---|---|---|
+| 1 | 1 | `1∠0°` |
+| 2 | 0 | `1∠180°` |
+| 3 | 1 | `1∠0°` |
+| 4 | 1 | `1∠0°` |
+| 5 | 0 | `1∠180°` |
+| 6 | 1 | `1∠0°` |
+
+**Bước 2 — ký hiệu bị trôi pha (kênh + CFO):** biên độ không đổi, CFO
+**cộng thêm góc** `7.2°×(k-1)` vào mọi ký hiệu, bất kể bit là gì:
+
+| k | ký hiệu gốc | + drift | = ký hiệu đo được ở Rx |
+|---|---|---|---|
+| 1 | `1∠0°` | +0.0° | `1∠0.0°` |
+| 2 | `1∠180°` | +7.2° | `1∠187.2°` |
+| 3 | `1∠0°` | +14.4° | `1∠14.4°` |
+| 4 | `1∠0°` | +21.6° | `1∠21.6°` |
+| 5 | `1∠180°` | +28.8° | `1∠208.8°` |
+| 6 | `1∠0°` | +36.0° | `1∠36.0°` |
+
+Cột cuối vừa nhảy 180° (đổi bit) vừa trôi dần (CFO) — trộn lẫn nhau, chưa
+nhìn ra CFO trực tiếp.
+
+**Bước 3 — xử lý để *ước lượng* CFO** (tương ứng `sym_val` trong code, chỉ
+dùng nội bộ, không dùng để giải mã): nhân mỗi ký hiệu với `preamble_sym(k)`
+(đã biết trước, chính là `1∠0°` hoặc `1∠180°`) → **cộng góc** để gỡ nhảy
+180° do bit, chỉ còn lại phần trôi thuần tuý:
+
+| k | ký hiệu đo được | × preamble_sym | = sym_val (cộng góc) |
+|---|---|---|---|
+| 1 | `1∠0.0°` | `1∠0°` | `1∠0.0°` |
+| 2 | `1∠187.2°` | `1∠180°` | `1∠7.2°` |
+| 3 | `1∠14.4°` | `1∠0°` | `1∠14.4°` |
+| 4 | `1∠21.6°` | `1∠0°` | `1∠21.6°` |
+| 5 | `1∠208.8°` | `1∠180°` | `1∠28.8°` |
+| 6 | `1∠36.0°` | `1∠0°` | `1∠36.0°` |
+
+Giờ góc tăng đều **7.2°/bước** → `diffs` (hiệu góc giữa 2 ký hiệu liên
+tiếp) đều = 7.2° → `avg_step = 7.2°` → `cfo_hz = avg_step/(2π·T) =
+0.1257/(2π×0.001) = 20 Hz`, khớp giá trị giả định.
+
+**Bước 4 — bù CFO cho *toàn bộ* ký hiệu** (tương ứng `mf_corr`, kể cả data
+phía sau, không cần biết bit là gì): nhân với `exp(-j·2π·cfo_hz·t)` =
+**cộng góc** `−7.2°×(k-1)` vào đúng ký hiệu đo được ở Bước 2 (không phải
+`sym_val` đã gỡ dấu ở Bước 3):
+
+| k | ký hiệu đo được | + correction | = ký hiệu phục hồi | slicer (`cos θ`) | bit |
+|---|---|---|---|---|---|
+| 1 | `1∠0.0°` | −0.0° | `1∠0.0°` | `+` | **1** |
+| 2 | `1∠187.2°` | −7.2° | `1∠180.0°` | `−` | **0** |
+| 3 | `1∠14.4°` | −14.4° | `1∠0.0°` | `+` | **1** |
+| 4 | `1∠21.6°` | −21.6° | `1∠0.0°` | `+` | **1** |
+| 5 | `1∠208.8°` | −28.8° | `1∠180.0°` | `−` | **0** |
+| 6 | `1∠36.0°` | −36.0° | `1∠0.0°` | `+` | **1** |
+
+Kết quả `1 0 1 1 0 1` — khớp đúng bit gốc. Bước 3 chỉ là mẹo *đo* CFO (biết
+trước bit preamble nên gỡ được dấu); Bước 4 mới là phép *sửa* thật, áp
+dụng đồng loạt cho mọi ký hiệu phía sau vì `cfo_hz` là một số duy nhất
+dùng chung cho cả khung — đúng code:
+`mf_corr = mf_out(start_idx:end) .* exp(-1j*2*pi*cfo_hz*n/Fs)`.
+
 ## Hình minh họa
 
 Sinh bằng cách chạy `gen_readme_images.m` (chạy `Tx.m` + `Rx.m` rồi lưu các
