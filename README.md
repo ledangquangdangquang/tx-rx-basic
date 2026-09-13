@@ -71,50 +71,23 @@ Nếu `RX_SOURCE = 'record'` không thu được gì (peak/rms gần 0) hoặc
 
 ## Sơ đồ khối máy phát (`Tx.m`)
 
+```mermaid
+flowchart TD
+    A["BIT NGUỒN<br/>preamble_bits (50 bit, randi) + data_bits (200 bit)"]
+    B["ĐÓNG KHUNG<br/>chèn pilot_val vào đầu mỗi block<br/><code>tx_bits = [preamble_bits, frame_bits]</code>"]
+    C["ÁNH XẠ 2-PAM<br/>0 → -1, 1 → +1<br/><code>symbols = 2*tx_bits - 1</code>"]
+    D["TẠO DẠNG XUNG (NRZ)<br/>lặp mỗi ký hiệu sps=48 mẫu<br/><code>baseband = repelem(symbols, sps)</code>"]
+    LO(["Local Oscillator<br/>Fc = 8000 Hz"])
+    E["MIXER (⊗)<br/>điều chế lên tần số mang (thực, không I/Q)<br/><code>passband = baseband .* cos(2*pi*Fc*t)</code>"]
+    F["GHÉP PAD + CHUẨN HOÁ<br/>thêm khoảng lặng 0.5s đầu/cuối, chuẩn hoá đỉnh về 0.9<br/><code>tx_signal = 0.9*[pad,passband,pad]/max(abs(...))</code>"]
+    G[("tx_cable.wav<br/>audiowrite(...); copy sang điện thoại rồi phát")]
+
+    A --> B --> C --> D --> E
+    LO --> E
+    E --> F --> G
 ```
-                      ┌─────────────┐
-                      │  BIT NGUỒN  │<--- preamble_bits (50 bit, randi) +
-                      │             │      data_bits (num_blocks*bits_per_block = 200 bit)
-                      └──────┬──────┘
-                             │
-                             ▼
-                      ┌─────────────┐
-                      │  ĐÓNG KHUNG │<--- chèn pilot_val vào đầu mỗi block
-                      │             │      CODE: frame_bits(...) = [pilot_val, blk];
-                      │             │            tx_bits = [preamble_bits, frame_bits];
-                      └──────┬──────┘
-                             │
-                             ▼
-                      ┌─────────────┐
-                      │ ÁNH XẠ 2-PAM│<--- 0 -> -1, 1 -> +1
-                      │             │      CODE: symbols = 2*tx_bits - 1;
-                      └──────┬──────┘
-                             │
-                             ▼
-                      ┌─────────────┐
-                      │ TẠO DẠNG    │<--- lặp mỗi ký hiệu sps=48 mẫu -> xung vuông NRZ
-                      │ XUNG (NRZ)  │      CODE: baseband = repelem(symbols, sps);
-                      └──────┬──────┘
-                             │
-                             ▼
-┌────────────────┐    ┌──────┴──────┐
-│Transmitter Local│───▶│    Mixer    │<--- cos(2*pi*Fc*t), Fc = 8000 Hz
-│ Oscillator (Fc) │    │     (⊗)     │      CODE: passband = baseband .* cos(2*pi*Fc*t);
-└────────────────┘    └──────┬──────┘
-                             │ <--- điều chế lên tần số mang (tín hiệu thực, không I/Q)
-                             ▼
-                      ┌─────────────┐
-                      │ GHÉP PAD +  │<--- thêm khoảng lặng đầu/cuối (0.5s) để dễ bắt đầu
-                      │ CHUẨN HOÁ   │      ghi âm, rồi chuẩn hoá biên độ đỉnh về 0.9
-                      │             │      CODE: tx_signal = [pad, passband, pad];
-                      │             │            tx_signal = 0.9*tx_signal/max(abs(tx_signal));
-                      └──────┬──────┘
-                             │
-                             ▼
-                      ┌─────────────┐
-                      │ tx_cable.wav│<--- audiowrite(...); copy sang điện thoại rồi phát
-                      └─────────────┘      (không có PA/anten thật — output thẳng ra file .wav)
-```
+
+(Không có tầng khuếch đại công suất hay anten thật — output là file `.wav`.)
 
 (Đối chiếu đúng thứ tự lệnh trong `Tx.m`; thuật ngữ mixer/LO chỉ để minh
 hoạ tương ứng với sơ đồ Rx bên dưới — không có tầng khuếch đại công suất
@@ -136,48 +109,24 @@ Biến workspace giữ nguyên quy ước: `Fs`, `Fc`, `baud_rate`, `sps`.
 
 ### Sơ đồ khối
 
-```
-                      ┌─────────────┐
-                      │   rx_raw    │<--- loopback: tx_signal / file: rx_debug.wav /
-                      │ (qua cáp,   │      record: audiorecorder — KHÔNG qua không khí
-                      │ không anten)│
-                      └──────┬──────┘
-                             │
-                             ▼
-┌────────────────┐    ┌──────┴──────┐
-│  Local Osc. Fc │───▶│    Mixer    │<--- exp(-1j*2*pi*Fc*t)
-└────────────────┘    │     (⊗)     │      CODE: rx_bb = rx_raw .* exp(-1j*2*pi*Fc*t);
-                       └──────┬──────┘
-                             │ <--- hạ tần về baseband phức (I/Q)
-                             ▼
-                      ┌─────────────┐
-                      │ LỌC PHỐI HỢP│<--- integrate-and-dump
-                      │  → mf_out   │      CODE: mf_out = conv(rx_bb, ones(sps,1)/sps, 'same');
-                      └──────┬──────┘
-                             │
-                             ▼
-                      ┌─────────────┐
-                      │ ĐỒNG BỘ +   │<--- xcorr với preamble, quét cfo_grid = -500:15:500Hz
-                      │ ƯỚC LƯỢNG/  │      trước để tránh tự triệt tiêu → start_idx; rồi ước
-                      │ BÙ CFO      │      lượng CFO từ pha preamble → mf_corr
-                      └──────┬──────┘      CODE: start_idx=lags(pk)+1; cfo_hz=...; mf_corr=...
-                             │
-                             ▼
-                      ┌─────────────┐
-                      │ CÂN BẰNG    │<--- mỗi block: tìm lại đỉnh pilot quanh vị trí dự đoán
-                      │ PILOT (ZF)  │      (bám trôi clock) → g = mf_corr(pilot_idx)/pilot_sym
-                      │ + SLICER    │      CODE: eq_sym = mf_corr(idx_c)/g; rx_bits(...) = real(eq_sym) > 0;
-                      └──────┬──────┘
-                             │
-                             ▼
-                      ┌─────────────┐
-                      │  rx_bits    │<--- bit đã khôi phục, so với data_bits gốc qua biterr
-                      └─────────────┘
+```mermaid
+flowchart TD
+    A[("rx_raw<br/>loopback: tx_signal / file: rx_debug.wav / record: audiorecorder<br/>— qua dây cáp, KHÔNG qua không khí")]
+    LO(["Local Oscillator<br/>Fc = 8000 Hz"])
+    B["MIXER (⊗)<br/>hạ tần về baseband phức (I/Q)<br/><code>rx_bb = rx_raw .* exp(-1j*2*pi*Fc*t)</code>"]
+    C["LỌC PHỐI HỢP<br/>integrate-and-dump<br/><code>mf_out = conv(rx_bb, ones(sps,1)/sps, 'same')</code>"]
+    D["ĐỒNG BỘ + ƯỚC LƯỢNG/BÙ CFO<br/>xcorr với preamble, quét cfo_grid = -500:15:500 Hz trước<br/>để tránh tự triệt tiêu → start_idx; rồi ước lượng CFO<br/>từ pha preamble → mf_corr<br/><code>start_idx = lags(pk)+1; cfo_hz = ...; mf_corr = ...</code>"]
+    E["CÂN BẰNG PILOT (ZF) + SLICER<br/>mỗi block: tìm lại đỉnh pilot quanh vị trí dự đoán<br/>(bám trôi clock) → g = mf_corr(pilot_idx)/pilot_sym<br/><code>eq_sym = mf_corr(idx_c)/g; rx_bits(...) = real(eq_sym) > 0</code>"]
+    F[("rx_bits<br/>bit đã khôi phục, so với data_bits gốc qua biterr")]
+
+    A --> B
+    LO --> B
+    B --> C --> D --> E --> F
 ```
 
-(Đối chiếu với đúng thứ tự code trong `Rx.m`, không phải suy diễn — dùng
-thuật ngữ máy thu RF cổ điển (mixer/LO/matched filter) chỉ để minh hoạ,
-kênh thật là dây cáp nên không có anten/LNA thật.)
+(Đối chiếu đúng thứ tự code trong `Rx.m`, không phải suy diễn — thuật ngữ
+mixer/LO/matched filter chỉ để minh hoạ tương ứng sơ đồ Tx ở trên, kênh
+thật là dây cáp nên không có anten/LNA thật.)
 
 ## Ý nghĩa từng biến trung gian trong `Rx.m`
 
