@@ -404,6 +404,72 @@ dụng đồng loạt cho mọi ký hiệu phía sau vì `cfo_hz` là một số
 dùng chung cho cả khung — đúng code:
 `mf_corr = mf_out(start_idx:end) .* exp(-1j*2*pi*cfo_hz*n/Fs)`.
 
+### Vì sao vẫn cần cân bằng pilot (ZF) sau khi đã bù CFO?
+
+Ví dụ CFO ở trên giả định biên độ luôn = 1 — đơn giản hoá. Thực tế dây cáp
++ loa điện thoại + mic laptop tạo thêm một **hệ số kênh chưa biết** `g`
+(suy hao biên độ + lệch pha cố định do thiết bị/mức volume) — khác CFO ở
+chỗ **không tăng dần theo thời gian** nên không tính bù trước bằng công
+thức được, chỉ có thể **đo trực tiếp** bằng 1 bit đã biết trước (pilot)
+mỗi block rồi chia ngược cho các bit data cùng block (zero-forcing).
+
+Tiếp tục ví dụ CFO: sau Bước 4 (đã bù CFO), xét 1 block gồm pilot + 4 bit
+data (rút gọn từ 10 bit thật): pilot = `1`, data = `1 0 1 0`. Giả sử
+`g = 0.5∠30°` (suy hao còn 0.5, lệch thêm 30°, hằng số trong block này).
+
+**Bước 1 — bit → ký hiệu kỳ vọng (đã bù CFO, kênh lý tưởng):**
+
+| | bit | ký hiệu kỳ vọng |
+|---|---|---|
+| pilot | 1 | `1∠0°` |
+| data1 | 1 | `1∠0°` |
+| data2 | 0 | `1∠180°` |
+| data3 | 1 | `1∠0°` |
+| data4 | 0 | `1∠180°` |
+
+**Bước 2 — qua kênh thật (nhân với `g`):** nhân biên độ, cộng góc:
+
+| | ký hiệu kỳ vọng | × g | = ký hiệu đo được (`mf_corr`) |
+|---|---|---|---|
+| pilot | `1∠0°` | `0.5∠30°` | `0.5∠30°` |
+| data1 | `1∠0°` | `0.5∠30°` | `0.5∠30°` |
+| data2 | `1∠180°` | `0.5∠30°` | `0.5∠210°` |
+| data3 | `1∠0°` | `0.5∠30°` | `0.5∠30°` |
+| data4 | `1∠180°` | `0.5∠30°` | `0.5∠210°` |
+
+Đây là cái Rx thực sự đo được — biên độ nhỏ lại và pha lệch 30° so với
+0°/180° gốc dù CFO đã bù xong. Nếu `g` lệch pha lớn hơn (vd 100°), dấu
+`cos θ` có thể đổi chiều dù bit không đổi — đây là lý do bắt buộc phải
+chia cho `g`, không thể bỏ qua bước này.
+
+**Bước 3 — đo `g` từ pilot** (code: `g = mf_corr(pilot)/pilot_sym`): chia
+hai số biên độ∠góc = **chia biên độ, trừ góc**:
+
+```
+g = (0.5∠30°) / (1∠0°) = (0.5/1) ∠ (30°-0°) = 0.5∠30°
+```
+
+→ đúng bằng hệ số kênh thật, vì pilot là "thước đo" biết trước để lộ ra `g`.
+
+**Bước 4 — cân bằng zero-forcing từng data** (code: `eq_sym = mf_corr(data)/g`):
+
+| | ký hiệu đo được | ÷ g | = eq_sym | slicer (`cos θ`) | bit |
+|---|---|---|---|---|---|
+| data1 | `0.5∠30°` | `0.5∠30°` | `1∠0°` | `+` | **1** |
+| data2 | `0.5∠210°` | `0.5∠30°` | `1∠180°` | `−` | **0** |
+| data3 | `0.5∠30°` | `0.5∠30°` | `1∠0°` | `+` | **1** |
+| data4 | `0.5∠210°` | `0.5∠30°` | `1∠180°` | `−` | **0** |
+
+Kết quả `1 0 1 0` — khớp bit gốc, biên độ kéo về đúng 1, pha về đúng
+0°/180°.
+
+**So với CFO:** CFO sửa bằng cách **cộng một góc tính trước theo thời
+gian** (`-7.2°×(k-1)`); pilot equalization sửa bằng cách **chia cho một
+số đo trực tiếp từ dữ liệu thật** (`g`, không có công thức tính trước vì
+phụ thuộc thiết bị/volume). Vì `g` chỉ coi là hằng số **trong 1 block**,
+code phải đo lại `g` mới ở đầu mỗi block (`for blk = 1:num_blocks`) chứ
+không dùng chung 1 giá trị cho cả khung như `cfo_hz`.
+
 ## Hình minh họa
 
 Sinh bằng cách chạy `gen_readme_images.m` (chạy `Tx.m` + `Rx.m` rồi lưu các
