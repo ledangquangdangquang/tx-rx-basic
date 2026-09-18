@@ -5,7 +5,7 @@ if ~exist('Fs', 'var')
     load(fullfile(fileparts(mfilename('fullpath')), 'tx_params.mat'));
 end
 
-RX_SOURCE = 'file'; % 'loopback' = tu-kiem-tra khong can dien thoai/cap that
+RX_SOURCE = 'record'; % 'loopback' = tu-kiem-tra khong can dien thoai/cap that
                         % 'record'   = thu that qua cap tai nghe
                         % 'file'     = doc lai rx_debug.wav da thu truoc do (chan doan lai
                         %              khong can thu lai lan nua)
@@ -95,22 +95,25 @@ data_start = length(preamble_ref) + 1;
 pilot_sym = 2*pilot_val - 1;
 rx_bits = zeros(1, num_blocks*bits_per_block);
 bit_ptr = 1;
-timing_off = 0; % lech luy ke (mau) so voi vi tri danh nghia
-search_win = round(sps/4); % ponytail: du bu drift GIUA 2 BLOCK lien tiep; drift nhanh hon thi tang so nay
+% Do troi dong ho suy ra tu CFO: song mang thu = Fc/(1+drift) = Fc + cfo_hz,
+% ky hieu bi keo dan (1+drift) => lech timing = drift * (so mau ke tu dau preamble).
+drift = -cfo_hz / (Fc + cfo_hz);
+search_win = 3; % ponytail: chi tinh chinh nho quanh du doan, KHONG cong don qua block (dinh pilot co the phang khi ky hieu ke cung dau pilot)
 block_timing = zeros(1, num_blocks); % ponytail: de in ra chan doan, khong dung de giai ma
 for blk = 1:num_blocks
     blk_off_nom = data_start + (blk-1)*(bits_per_block+1)*sps;
-    pilot_idx_nom = blk_off_nom + timing_off + round(sps/2) - 1;
+    pilot_nom = blk_off_nom + round(sps/2) - 1;
+    pilot_idx_nom = pilot_nom + round(drift * pilot_nom);
     cand = pilot_idx_nom + (-search_win:search_win);
     cand = cand(cand >= 1 & cand <= length(mf_corr));
     [~, best_k] = max(abs(mf_corr(cand)));
     pilot_idx = cand(best_k);
-    timing_off = pilot_idx - (blk_off_nom + round(sps/2) - 1); % cap nhat cho block sau
+    timing_off = pilot_idx - pilot_nom;
     block_timing(blk) = timing_off;
     blk_off = blk_off_nom + timing_off;
     g = mf_corr(blk_off + round(sps/2) - 1) / pilot_sym; % pilot o dau block
     for b = 1:bits_per_block
-        idx_c = blk_off + b*sps + round(sps/2) - 1;
+        idx_c = blk_off + b*sps + round(sps/2) - 1 + round(drift*b*sps); % drift trong block
         eq_sym = mf_corr(idx_c) / g;
         rx_bits(bit_ptr) = real(eq_sym) > 0;
         bit_ptr = bit_ptr + 1;
