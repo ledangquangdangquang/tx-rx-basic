@@ -13,6 +13,7 @@
 - Khi đó terminal của matlab sẽ nghe và đo lỗi bit
 # Chi tiết cách hoạt động
 ## Tx
+
 **1. Setup tham số**
 | Tham số | Giá trị |
 | -------------- | --------------- |
@@ -56,6 +57,7 @@ tx_bits = [preamble_bits, frame_bits];
 - vòng `for k`: lấy 10 bit thứ k (`blk`) rồi ghép `[pilot_val, blk]` vào 11 ô của block k trong `frame_bits`. `(k-1)*bits_per_block+1 : k*bits_per_block` là đọc 10 bit, `(k-1)*(bits_per_block+1)+1 : k*(bits_per_block+1)` là ghi 11 bit.
 - Pilot ở **mỗi** block (không chỉ đầu khung) vì gain/pha kênh đổi theo thời gian, cần đo lại thường xuyên.
 - `tx_bits = [preamble_bits, frame_bits]`: thứ tự phát thực tế. `data_start`, `blk_off_nom` ở Rx dựa đúng thứ tự này.
+
 **3. Điều chế 2-PAM**
 - 2-PAM là có M=2 mức 1 và -1, là 2 ký hiệu 1 và -1
 - Mỗi ký hiệu cần log2(M) (=1) bit để biểu diễn
@@ -70,6 +72,7 @@ Cách biểu diễn ký hiệu ví dụ: ký hiệu -1 thì sẽ đuợc nhân t
 Để làm gì: biến bit thành dạng sóng.
 - `2*tx_bits - 1`: bit 0 → -1, bit 1 → +1 (hai mức đối xứng, cùng năng lượng).
 - `repelem(symbols, sps)`: lặp mỗi ký hiệu 48 lần thành xung vuông dài 1 ký hiệu. Chọn xung vuông vì trung bình 48 mẫu ở Rx (bước 4) chính là bộ lọc khớp với nó.
+
 **4. Đưa lên tần số sóng mang**
 Nhân toàn bộ tín hiệu trên (biến `baseband`) với `cos(2*pi*Fc*t)`
 ```
@@ -129,6 +132,7 @@ fprintf('Copy file sang dien thoai, phat, roi chay Rx.m.\n');
 - `tx_signal(:)`: ép thành cột (`audiowrite` cần mỗi kênh một cột).
 - `save`: Rx cần đúng `preamble_bits`, `data_bits`, `Fc`, `sps`... của **lần chạy này**. `data_bits` mới mỗi lần chạy `Tx.m` nên `tx_params.mat` phải đi cùng bản thu tương ứng. `tx_signal` lưu để chạy loopback.
 ## Rx
+
 **1. Nạp tham số**
 Nạp tham só từ file `tx_params.mat` xuất ra từ khi chạy `Tx.m`
 ```
@@ -139,6 +143,7 @@ end
 Để làm gì: có đủ tham số để giải mã.
 - `exist('Fs','var')`: workspace còn biến từ `Tx.m` thì dùng luôn, mất thì mới `load`. Hệ quả: workspace còn `Fs`, `Fc`... cũ thì `Rx` dùng biến cũ, không đọc lại file.
 - `fileparts(mfilename('fullpath'))`: thư mục chứa `Rx.m`, nên tìm đúng `tx_params.mat` dù đang đứng ở thư mục khác.
+
 **2. Chọn nguồn tín hiệu**
 Ghi âm 5s
 ```
@@ -176,6 +181,7 @@ end
 - `audiorecorder(Fs, 16, 1)`: `Fs` mẫu/giây, 16 bit, 1 kênh (mono). `input_device_id` chọn thiết bị nhập (mic laptop hay line-in).
 - `recordblocking` ghi và chờ đủ 5 s; `getaudiodata` lấy ra dãy mẫu.
 - `peak`, `rms` gần 0: thu nhầm thiết bị hoặc chưa cắm cáp. `audiowrite(..., 'rx_debug.wav')` lưu lại để chạy chế độ `'file'`.
+
 **3. Hạ tần xuống baseband phức**
 ```
 % Ha tan xuong baseband phuc (I/Q)
@@ -190,6 +196,7 @@ rx_bb = rx_raw .* exp(-1j*2*pi*Fc*t);
 - `t`: cột thời gian của từng mẫu thu (dấu `'` để ra cột).
 - `rx_raw .* exp(-1j*2*pi*Fc*t)`: nhân với sóng mang phức quay ngược. Thành phần ở +`Fc` dịch về 0 Hz (thứ cần), thành phần ở -`Fc` dịch xuống -2`Fc` (**ảnh**, bước 4 sẽ loại).
 - Dùng số phức (I = phần thực, Q = phần ảo) để giữ pha: ký hiệu ±1 nằm trên trục thực nếu pha khớp. Lệch pha kênh làm nó xoay đi một góc, CFO làm nó xoay dần theo thời gian (sửa ở bước 6–8).
+
 **4. Lọc phối hợp**
 Còn gọi là matched filter, mục đích là cho SNR lớn nhất tại thời điểm lấy mẫu 
 ```
@@ -202,6 +209,7 @@ mf_out = conv(rx_bb, ones(sps,1)/sps, 'same');
 - Vì sao tăng SNR: tín hiệu cộng cùng dấu (×48), nhiễu ngẫu nhiên chỉ cộng lên ×√48.
 - `'same'`: đầu ra cùng độ dài với `rx_bb`.
 - Trong mỗi ký hiệu chỉ có một mẫu mà cửa sổ trùng đúng ký hiệu (biên độ đầy đủ), nên các bước sau phải chọn đúng mẫu đó (bước 5–8).
+
 **5. Đồng bộ + quét CFO thô**
 ```
 preamble_sym = 2*preamble_bits - 1;
@@ -235,6 +243,7 @@ end
 - `start_idx = lags(pk) + 1`: độ trễ (tính từ 0) đổi sang chỉ số MATLAB (từ 1) = mẫu đầu tiên của preamble.
 - `sync_confidence = peak/median`: đỉnh so với mức nền tương quan, chỉ ~vài lần là chưa thấy preamble. Bản thu có nhiều khoảng lặng thì mức nền rất nhỏ, nên số này cao cả khi ghép sai cặp (xem "Những bẫy khi chạy").
 - `if ... error`: preamble phải nằm trọn trong bản thu.
+
 **6. Uớc luợng CFO chính xác**
 ```
 preamble_seg = mf_out(start_idx : start_idx + length(preamble_ref) - 1);
@@ -254,6 +263,7 @@ cfo_hz = avg_step / (2*pi*sps/Fs);
 - `diffs = sym_val(2:end) .* conj(sym_val(1:end-1))`: nhân với liên hợp của ký hiệu trước, góc của tích = pha quay giữa hai ký hiệu liên tiếp.
 - `angle(mean(diffs))`: cộng vector rồi mới lấy góc, bền hơn lấy góc từng cặp (không bị nhảy ±π do nhiễu).
 - `cfo_hz = avg_step/(2*pi*sps/Fs)`: 1 ký hiệu dài `sps/Fs` = 1 ms, pha quay `2π·cfo·1 ms`, suy ra cfo (Hz). `angle` chỉ trong ±π nên đo được |cfo| < `baud_rate`/2 = 500 Hz (khớp lưới bước 5). `cfo_hz` > 0: sóng mang thu cao hơn `Fc`.
+
 **7. Bù CFO**
 ```
 n = (0:length(mf_out)-start_idx)';
@@ -263,6 +273,7 @@ mf_corr = mf_out(start_idx:end) .* exp(-1j*2*pi*cfo_hz*n/Fs);
 - `n`: chỉ số mẫu tính từ `start_idx` (0 tại đầu preamble).
 - `exp(-1j*2*pi*cfo_hz*n/Fs)`: xoay ngược góc `2π·cfo·n/Fs` đã tích luỹ đến mẫu n.
 - `mf_out(start_idx:end)`: bỏ phần trước preamble (khoảng lặng), nên từ đây `mf_corr(1)` là mẫu đầu preamble và `data_start` tính từ đó. Sau bước này pha còn lệch một hằng số (pha kênh), pilot xử lý ở bước 8.
+
 **8. Giải mã từng block**
 ```
 data_start = length(preamble_ref) + 1;
@@ -308,6 +319,7 @@ fprintf('Lech dinh pilot tich luy tung block (mau, +-%d la cua so tim): %s\n', s
 - vòng `b` (1..10): bit dữ liệu thứ `b` sau pilot, cách pilot `b·sps` mẫu.
 - `eq_sym = mf_corr(idx_c)/g`: chia cho `g` (cân bằng zero-forcing) để về ±1 thực, hết xoay và méo biên độ.
 - `real(eq_sym) > 0`: ngưỡng quyết định, dương → bit 1, âm → bit 0.
+
 **9. Tính BER**
 ```
 [num_err, ber] = biterr(data_bits, rx_bits);
@@ -317,6 +329,7 @@ fprintf('CFO uoc luong: %.2f Hz. So bit loi: %d / %d, BER = %.4f\n', ...
 Để làm gì: đếm bit sai.
 - `biterr(data_bits, rx_bits)`: `num_err` = số bit khác nhau, `ber` = `num_err`/200. BER 0 là đúng hết.
 - In `cfo_hz` để kiểm: loopback thì ≈ 0, thu thật khoảng vài chục Hz.
+
 **10. Chuẩn đoán**
 ```
 block_err = zeros(1, num_blocks);
@@ -329,6 +342,7 @@ fprintf('Loi tung block (block 1..%d): %s\n', num_blocks, mat2str(block_err));
 Để làm gì: xem lỗi nằm ở đâu.
 - `idxs`: 10 bit của block `blk`; `block_err(blk)`: số bit sai trong block đó.
 - Lỗi rải đều: nhiễu. Lỗi dồn hoặc tăng về cuối khung: trôi đồng hồ chưa bù đủ.
+
 **11. Vẽ hình**
 ```
 scatterplot(mf_corr(data_start:end));
