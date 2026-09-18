@@ -1,5 +1,250 @@
 # tx_rx_basic
+2-PAM (BPSK), ZF (zero-forcing), CFO (Carrier Frequency Offset), truyền qua cáp tai nghe
+> [!NOTE]
+> Nhiêu đây thực sự là cơ bản
+> Symbol là ký hiệu, là ngôi sao, là mức
+> Sample là mẫu, nhiều mẫu để biểu diễn 1 ký hiệu
+# Cách chạy
+- Chạy `Tx.m` sẽ xuất ra file `tx_cable.wav`, `tx_params.mat`
+- Gửỉ file `tx_cable.wav` sang điên thoại
+- Setup cáp tai nghe (line-in/mic) 
+- Chạy `Rx.m` với biến `RX_SOURCE = 'record'`
+- Phát `tx_cable.wav` trên điện thoại
+- Khi đó terminal của matlab sẽ nghe và đo lỗi bit
+# Chi tiết cách hoạt động
+## Tx
+**1. Setup tham số**
+| Tham số | Giá trị |
+| -------------- | --------------- |
+| Fs (tần số lấy mẫu) | 48000 (Hz) |
+| Fc (tần số sóng mang) | 8000 (Hz) |
+| baud_rate (tốc độ ký hiệu) | 1000 (symbol/s) |
+| sps (mẫu/ký hiệu) | Fs/baud_rate = 48 (sample/symbol)|
+| bits_per_block (số bit trên 1 khối)| 10|
+| num_blocks (số block)|20|
+| pilot_val (bit plot)| 1|
 
+**2. Sinh bit**
+Sinh 50 bit biết truớc `preamble_bits` 50 bit này đựoc biết ở cả Tx và Rx, sinh `num_blocks x bits_per_block` bit data `data_bits`, chèn bit pilot có giá trị là `pilot_val` vào trong mỗi block trong `data_bits`.
+
+```
+preamble_bits = randi([0 1], 1, 50); % chuoi biet truoc de dong bo + uoc luong CFO
+data_bits = randi([0 1], 1, num_blocks*bits_per_block);
+
+frame_bits = zeros(1, num_blocks*(bits_per_block+1));
+for k = 1:num_blocks
+    blk = data_bits((k-1)*bits_per_block+1 : k*bits_per_block);
+    frame_bits((k-1)*(bits_per_block+1)+1 : k*(bits_per_block+1)) = [pilot_val, blk];
+end
+tx_bits = [preamble_bits, frame_bits];
+
+```
+`frame_bits`: là `data_bits` đã đựoc chèn pilot
+
+**3. Điều chế 2-PAM**
+- 2-PAM là có M=2 mức 1 và -1, là 2 ký hiệu 1 và -1
+- Mỗi ký hiệu cần log2(M) (=1) bit để biểu diễn
+- Mỗi ký hiệu cần sps (=48) mẫu để biểu diễn
+=> Mỗi bit cần 48 mẫu để biểu diễn
+```
+symbols = 2*tx_bits - 1;              % 0->-1, 1->+1
+baseband = repelem(symbols, sps);     % xung vuong, integrate-and-dump o Rx se khop
+```
+Cách biểu diễn ký hiệu ví dụ: ký hiệu -1 thì sẽ đuợc nhân thành -1 -1 -1 -1 ... 48 số -1 (gọi là 48 mẫu -1)
+
+**4. Đưa lên tần số sóng mang**
+Nhân toàn bộ tín hiệu trên (biến `baseband`) với `cos(2*pi*Fc*t)`
+```
+t = (0:length(baseband)-1)/Fs;
+passband = baseband .* cos(2*pi*Fc*t);
+```
+Tạo trục thời gian: mỗi mẫu cách nhau `1/Fs` (s) nên mẫu đầu tiên là từ 0 -> 1/Fs, mẫu thứ 2 là từ 
+| thời gian | mẫu |
+| -------------- | --------------- |
+| 0 -> 1/Fs | mẫu 1 |
+| 1/Fs -> 2/Fs | mẫu 2 |
+| 2/Fs -> 3/Fs | mẫu 3 |
+| 3/Fs -> 4/Fs | mẫu 4 |
+| 4/Fs -> 5/Fs | mẫu 5 |
+| 5/Fs -> 6/Fs | mẫu 6 |
+| 6/Fs -> 7/Fs | mẫu 7 |
+| 7/Fs -> 8/Fs | mẫu 8 |
+| 8/Fs -> 9/Fs | mẫu 9 |
+| 9/Fs -> 10/Fs | mẫu 10 |
+|...|...|
+| length(baseband)/Fs -> (length(baseband)-1)/Fs | mẫu length(baseband)|
+
+
+**5. Thêm khoảng lặng**
+```
+pad = zeros(1, round(0.5*Fs));        % khoang lang dau/cuoi cho de bat dau ghi am
+tx_signal = [pad, passband, pad];
+tx_signal = 0.9 * tx_signal / max(abs(tx_signal));
+```
+pad = zeros(1, round(0.5*Fs)) ở Tx.m:30 — thêm 0.5s im lặng vào đầu và cuối tx_signal (Tx.m:31).
+Lý do:
+- Luôn có độ trễ vài trăm ms giữa lúc nhấn nút và lúc âm thanh thực sự phát/thu.
+- Khoảng lặng đầu là vùng đệm để tín hiệu thật (frame 2-PAM) không bị cắt mất phần đầu nếu recorder khởi động chậm.
+- Khoảng lặng cuối, phòng trường hợp việc phát kết thúc trước khi recorder kịp dừng hoặc ngược lại.
+- Không ảnh hưởng giải mã vì Rx.m tìm frame bằng cross-correlation với preamble (Rx.m:55), không dựa vào vị trí mẫu cố định — im lặng thừa ở hai đầu bị bỏ qua tự nhiên.
+
+Tx.m:32 — tx_signal = 0.9 * tx_signal / max(abs(tx_signal));
+- Chia cho max(abs(...)): chuẩn hoá biên độ, đưa mẫu lớn nhất về đúng 1.0 — vì audiowrite yêu cầu giá trị trong khoảng [-1, 1], vượt quá sẽ bị clip (méo dạng sóng, phá hỏng symbol).
+- Nhân với 0.9: chừa lại 10% headroom thay vì đẩy sát biên độ 1.0. Lý do thực tế: loa điện thoại + DAC + đường cáp có thể có overshoot nhỏ hoặc gain dương ở một số thiết bị, đẩy sát 1.0 dễ bị clip cứng khi phát thật. 0.9 là mức an toàn thường dùng, không phải số magic bắt buộc — có thể hạ xuống 0.7–0.8 nếu vẫn thấy clip trên rx_debug.wav.
+
+**6. Ghi file**
+Ghi file và lưu tham số cấu hình vào thôi
+```
+audiowrite('tx_cable.wav', tx_signal(:), Fs);
+save('tx_params.mat', 'Fs', 'Fc', 'baud_rate', 'sps', 'bits_per_block', ...
+    'num_blocks', 'pilot_val', 'preamble_bits', 'data_bits', 'tx_bits', 'tx_signal');
+fprintf('Da ghi tx_cable.wav: %d bit du lieu trong %d block (preamble %d bit).\n', ...
+    numel(data_bits), num_blocks, numel(preamble_bits));
+fprintf('Copy file sang dien thoai, phat, roi chay Rx.m.\n');
+```
+## Rx
+**1. Nạp tham số**
+Nạp tham só từ file `tx_params.mat` xuất ra từ khi chạy `Tx.m`
+```
+if ~exist('Fs', 'var')
+    load(fullfile(fileparts(mfilename('fullpath')), 'tx_params.mat'));
+end
+```
+**2. Chọn nguồn tín hiệu**
+Ghi âm 5s
+```
+RX_SOURCE = 'record'; % 'loopback' = tu-kiem-tra khong can dien thoai/cap that
+                        % 'record'   = thu that qua cap tai nghe
+                        % 'file'     = doc lai rx_debug.wav da thu truoc do (chan doan lai
+                        %              khong can thu lai lan nua)
+
+if strcmp(RX_SOURCE, 'loopback')
+    rx_raw = tx_signal(:);
+elseif strcmp(RX_SOURCE, 'file')
+    rx_raw = audioread(fullfile(fileparts(mfilename('fullpath')), 'rx_debug.wav'));
+else
+    record_time = 5; % ghi thu that: chua biet tx_signal dai bao nhieu, mac dinh 5s
+    input_device_id = -1; % ponytail: -1 = thiet bi mac dinh he thong; neu bi thu nham
+                           % mic laptop thay vi cap tai nghe, chay audiodevinfo(1) de
+                           % xem danh sach ID roi gan so do vao day
+    if input_device_id >= 0
+        rec = audiorecorder(Fs, 16, 1, input_device_id);
+    else
+        rec = audiorecorder(Fs, 16, 1);
+    end
+    disp('Bat dau phat tx_cable.wav tren dien thoai ngay bay gio...');
+    recordblocking(rec, record_time);
+    rx_raw = getaudiodata(rec);
+    fprintf('Muc tin hieu thu duoc: peak=%.4f, rms=%.4f (gan 0 nghia la thu nham thiet bi hoac chua cam cap)\n', ...
+        max(abs(rx_raw)), rms(rx_raw));
+    audiowrite(fullfile(fileparts(mfilename('fullpath')), 'rx_debug.wav'), rx_raw, Fs); % ponytail: de soi lai neu decode sai
+end
+```
+**3. Hạ tần xuống baseband phức**
+```
+% Ha tan xuong baseband phuc (I/Q)
+t = (0:length(rx_raw)-1)'/Fs;
+rx_bb = rx_raw .* exp(-1j*2*pi*Fc*t);
+```
+**4. Lọc phối hợp**
+```
+mf_out = conv(rx_bb, ones(sps,1)/sps, 'same');
+```
+**5. Đồng bộ + quét CFO thô**
+```
+preamble_sym = 2*preamble_bits - 1;
+preamble_ref = repelem(preamble_sym, sps).';
+n_full = (0:length(mf_out)-1)';
+cfo_grid = -500:15:500;
+best_peak = -1;
+for cfo_try = cfo_grid
+    derot = mf_out .* exp(-1j*2*pi*cfo_try*n_full/Fs);
+    [c_try, lags_try] = xcorr(derot, preamble_ref);
+    [pv, pk_try] = max(abs(c_try));
+    if pv > best_peak
+        best_peak = pv; c = c_try; lags = lags_try; pk = pk_try;
+    end
+end
+peak_val = best_peak;
+start_idx = lags(pk) + 1;
+sync_confidence = peak_val / median(abs(c)); % thap (~vai lan) nghia la khong that su tim thay preamble
+fprintf('Dong bo: peak/median tuong quan = %.1f (cang cao cang chac chan tim dung preamble)\n', sync_confidence);
+
+if start_idx < 1 || start_idx + length(preamble_ref) - 1 > length(mf_out)
+    error('Khong tim thay preamble trong tin hieu thu duoc.');
+end
+```
+**6. Uớc luợng CFO chính xác**
+```
+preamble_seg = mf_out(start_idx : start_idx + length(preamble_ref) - 1);
+sym_val = zeros(length(preamble_bits), 1);
+for k = 1:length(preamble_bits)
+    idx_c = (k-1)*sps + round(sps/2);
+    sym_val(k) = preamble_seg(idx_c) * preamble_sym(k); % bu dau +-1
+end
+diffs = sym_val(2:end) .* conj(sym_val(1:end-1));
+avg_step = angle(mean(diffs)); % trung binh vector, ben vung voi wraparound hon trung binh goc truc tiep
+cfo_hz = avg_step / (2*pi*sps/Fs);
+```
+**7. Bù CFO**
+```
+n = (0:length(mf_out)-start_idx)';
+mf_corr = mf_out(start_idx:end) .* exp(-1j*2*pi*cfo_hz*n/Fs);
+```
+**8. Giải mã từng block**
+```
+data_start = length(preamble_ref) + 1;
+pilot_sym = 2*pilot_val - 1;
+rx_bits = zeros(1, num_blocks*bits_per_block);
+bit_ptr = 1;
+timing_off = 0; % lech luy ke (mau) so voi vi tri danh nghia
+search_win = round(sps/4); % ponytail: du bu drift GIUA 2 BLOCK lien tiep; drift nhanh hon thi tang so nay
+block_timing = zeros(1, num_blocks); % ponytail: de in ra chan doan, khong dung de giai ma
+for blk = 1:num_blocks
+    blk_off_nom = data_start + (blk-1)*(bits_per_block+1)*sps;
+    pilot_idx_nom = blk_off_nom + timing_off + round(sps/2) - 1;
+    cand = pilot_idx_nom + (-search_win:search_win);
+    cand = cand(cand >= 1 & cand <= length(mf_corr));
+    [~, best_k] = max(abs(mf_corr(cand)));
+    pilot_idx = cand(best_k);
+    timing_off = pilot_idx - (blk_off_nom + round(sps/2) - 1); % cap nhat cho block sau
+    block_timing(blk) = timing_off;
+    blk_off = blk_off_nom + timing_off;
+    g = mf_corr(blk_off + round(sps/2) - 1) / pilot_sym; % pilot o dau block
+    for b = 1:bits_per_block
+        idx_c = blk_off + b*sps + round(sps/2) - 1;
+        eq_sym = mf_corr(idx_c) / g;
+        rx_bits(bit_ptr) = real(eq_sym) > 0;
+        bit_ptr = bit_ptr + 1;
+    end
+end
+fprintf('Lech dinh pilot tich luy tung block (mau, +-%d la cua so tim): %s\n', search_win, mat2str(block_timing));
+```
+**9. Tính BER**
+```
+[num_err, ber] = biterr(data_bits, rx_bits);
+fprintf('CFO uoc luong: %.2f Hz. So bit loi: %d / %d, BER = %.4f\n', ...
+    cfo_hz, num_err, numel(data_bits), ber);
+```
+**10. Chuẩn đoán**
+```
+block_err = zeros(1, num_blocks);
+for blk = 1:num_blocks
+    idxs = (blk-1)*bits_per_block+1 : blk*bits_per_block;
+    block_err(blk) = sum(rx_bits(idxs) ~= data_bits(idxs));
+end
+fprintf('Loi tung block (block 1..%d): %s\n', num_blocks, mat2str(block_err));
+```
+**11. Vẽ hình**
+```
+scatterplot(mf_corr(data_start:end));
+title('Ky hieu du lieu sau can bang pilot');
+figure; plot(real(rx_bb)); title('Baseband I sau ha tan');
+```
+
+
+---
+---
 Modem 2-PAM (BPSK) qua dây: laptop phát `tx_cable.wav`, copy sang điện thoại
 phát lại, laptop ghi âm qua cáp tai nghe (line-in/mic) rồi giải mã lại thành
 bit gốc và tính BER. "Kênh truyền" chỉ là dây cáp + loa/DAC điện thoại +
