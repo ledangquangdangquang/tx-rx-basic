@@ -25,6 +25,7 @@
 | pilot_val (bit plot)| 1|
 
 **2. Sinh bit**
+
 Sinh 50 bit biết truớc `preamble_bits` 50 bit này đựoc biết ở cả Tx và Rx, sinh `num_blocks x bits_per_block` bit data `data_bits`, chèn bit pilot có giá trị là `pilot_val` vào trong mỗi block trong `data_bits`.
 
 ```
@@ -146,10 +147,18 @@ end
 t = (0:length(rx_raw)-1)'/Fs;
 rx_bb = rx_raw .* exp(-1j*2*pi*Fc*t);
 ```
+- Phổ tần số của `rx_raw`
+- ![](./assest/rx_raw.png)
+- Phổ tần số của `rx_bb`
+- ![](./assest/rx_bb.png)
 **4. Lọc phối hợp**
+Còn gọi là matched filter
 ```
 mf_out = conv(rx_bb, ones(sps,1)/sps, 'same');
 ```
+- conv: convolution (phép chập) dùng khi mô hình hệ thống (tín hiệu đi qua bộ lọc/kênh) — output là tín hiệu.
+- Phổ tần số của `mf_out`
+- ![](./assest/mf_out.png)
 **5. Đồng bộ + quét CFO thô**
 ```
 preamble_sym = 2*preamble_bits - 1;
@@ -174,6 +183,7 @@ if start_idx < 1 || start_idx + length(preamble_ref) - 1 > length(mf_out)
     error('Khong tim thay preamble trong tin hieu thu duoc.');
 end
 ```
+- xcorr: cross-correlation (tuơng quan chéo) dùng để đo độ giống nhau / tìm độ lệch (lag) giữa hai tín hiệu — output dùng để tìm peak, tức là tìm offset.
 **6. Uớc luợng CFO chính xác**
 ```
 preamble_seg = mf_out(start_idx : start_idx + length(preamble_ref) - 1);
